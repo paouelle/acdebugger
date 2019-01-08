@@ -3,6 +3,7 @@
 # doPrivileged() blocks.
 
 com.fasterxml
+com.google.
 com.sun.
 java.
 javax.

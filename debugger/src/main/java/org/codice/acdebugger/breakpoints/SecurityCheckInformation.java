@@ -21,9 +21,11 @@ import java.io.IOError;
 import java.io.IOException;
 import java.security.Permission;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.stream.Collectors;
@@ -42,7 +44,7 @@ import org.codice.acdebugger.api.StackFrameInformation;
  * security failure.
  */
 class SecurityCheckInformation extends SecuritySolution implements SecurityFailure {
-  private static final String DOUBLE_LINES =
+  static final String DOUBLE_LINES =
       "=======================================================================";
 
   /**
@@ -71,9 +73,16 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
 
   /**
    * list of protection domains (i.e. bundle name/domain location) in the security context as
-   * recomputed here. This list will not contain nulls or duplicates.
+   * recomputed here. This list may contain nulls but never duplicate domains.
    */
   private final List<String> domains;
+
+  /**
+   * bit set indicating if an entry in the domains list was combined. An entry that came from the
+   * stack could potentially be surrounded by a <code>doPrivileged()</code> block and be correlated
+   * with the stack information retrieved from the current thread.
+   */
+  private final BitSet isCombined;
 
   /**
    * the index in the stack for the frame that doesn't have the failed permission, -1 if no failures
@@ -87,18 +96,19 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
   private int privilegedStackIndex = -1;
 
   /**
+   * the domain names right after the doPrivileged() block doing it on behalf of its caller and up
+   * to the end of the stack or up to the next doPrivileged() block not doing it on behalf of its
+   * caller. This will help us identify domains that would otherwise be marked combined by the
+   * context as not being combined since we know for a fact they come from the stack and therefore
+   * can be analyzed to have solutons including insertions of doPrivileged() blocks.
+   */
+  private Set<String> onBehalfOfCallerPrivilegedDomains;
+
+  /**
    * index in the domains list where we recomputed the reported security exception to be generated
    * for or <code>-1</code> if no failures.
    */
   private int failedDomainIndex = -1;
-
-  /**
-   * index in the domains list where we estimate the security manager started combining additional
-   * domains not coming from the stack. Below this mark are pure domains extracted from the current
-   * stack. At this mark and above are domains that were combined. Will be <code>-1</code> if no
-   * combined domains were added.
-   */
-  private int combinedDomainsStartIndex = -1;
 
   private final boolean invalid;
 
@@ -121,9 +131,12 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
         context.getPermissions(),
         Collections.emptySet(),
         Collections.emptyList());
+    final int size = context.getDomains().size();
+
     this.debug = debug;
     this.context = context;
-    this.domains = new ArrayList<>(context.getDomains().size());
+    this.domains = new ArrayList<>(size);
+    this.isCombined = new BitSet(size);
     if (context.getCurrentDomain() == null) {
       // since bundle-0/boot domain always has all permissions, we cannot received null as the
       // current domain where the failure occurred
@@ -133,6 +146,7 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
           "unable to find location for domain: "
               + context.getCurrentDomainReference().type().name());
     }
+    this.onBehalfOfCallerPrivilegedDomains = new HashSet<>(8);
     this.invalid = !recompute();
     analyze0();
   }
@@ -145,15 +159,17 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
    */
   private SecurityCheckInformation(SecurityCheckInformation failure) {
     super(failure);
+    final String failedDomain = failure.getFailedDomain();
+    final int size = failure.domains.size();
+
     this.debug = failure.debug;
     // add the failed domain from the specified failure as a privileged and as a granted one
-    super.grantedDomains.add(failure.getFailedDomain());
-    this.context = failure.context.grant(failure.getFailedDomain());
-    // the combined domain start index is something fixed provided to us when the error is detected
-    // this won't change because we are simply granting permissions to domains as this wouldn't
-    // change the stack or the access control context as seen originally
-    this.combinedDomainsStartIndex = failure.combinedDomainsStartIndex;
-    this.domains = new ArrayList<>(failure.domains.size());
+    super.grantedDomains.add(failedDomain);
+    this.context = failure.context.grant(failedDomain);
+    this.domains = new ArrayList<>(size);
+    this.isCombined = new BitSet(size);
+    this.onBehalfOfCallerPrivilegedDomains =
+        new HashSet<>(failure.onBehalfOfCallerPrivilegedDomains);
     this.invalid = !recompute();
   }
 
@@ -166,16 +182,14 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
    */
   private SecurityCheckInformation(SecurityCheckInformation failure, int index) {
     super(failure, index);
+    final int size = failure.domains.size();
+
     this.debug = failure.debug;
-    // because we are extending privileges which would be before any combined domains gets added to
-    // the access control context, we can safely account for the fact that these combined domains
-    // won't be present anymore in the new and revised access control context, as such we should
-    // simply clear whatever start index would normally be inherited from the provided failure
-    // we will also make sure that while recomputing the resulting failure, we ignore combined
-    // domains provided by the original access control context
     this.context = failure.context;
-    this.combinedDomainsStartIndex = -1;
-    this.domains = new ArrayList<>(failure.domains.size());
+    this.domains = new ArrayList<>(size);
+    this.isCombined = new BitSet(size);
+    this.onBehalfOfCallerPrivilegedDomains =
+        new HashSet<>(failure.onBehalfOfCallerPrivilegedDomains);
     this.invalid = !recompute();
   }
 
@@ -319,17 +333,35 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
     return failedDomainIndex;
   }
 
-  /**
-   * Gets the index in the recomputed domains list where we estimate the security manager started
-   * combining additional domains not coming from the stack. Below this mark are pure domains
-   * extracted from the current stack). At this mark and above are domains that were combined.
-   *
-   * @return the starting index for combined domains or <code>-1</code> if no combined domains were
-   *     present
-   */
   @VisibleForTesting
-  int getCombinedDomainsStartIndex() {
-    return combinedDomainsStartIndex;
+  String[] getCombinedDomains() {
+    return isCombined.stream().mapToObj(domains::get).toArray(String[]::new);
+  }
+
+  /**
+   * Checks if the specified domain index corresponds to a combined domain which means it cannot be
+   * analyzed based on its stack location.
+   *
+   * @param index the index of the domain to check
+   * @return <code>true</code> if the specified domain is considered to have been combined; <code>
+   *     false</code> otherwise
+   */
+  private boolean isCombined(int index) {
+    return isCombined.get(index);
+  }
+
+  /**
+   * Checks if the specified domain corresponds to a combined domain which means it cannot be
+   * analyzed based on its stack location.
+   *
+   * @param domain the domain to check
+   * @return <code>true</code> if the specified domain is considered to have been combined or is not
+   *     defined in the current context; <code>false</code> otherwise
+   */
+  private boolean isCombined(@Nullable String domain) {
+    final int index = domains.indexOf(domain);
+
+    return (index == -1) || isCombined.get(index);
   }
 
   /**
@@ -347,8 +379,7 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
    *
    * <p>When the breakpoint is invoked, we could extract that information from the loop in the
    * <code>AccessControlContext.checkPermission()</code> method. But instead of doing that, it is
-   * simpler to keep the same logic to recompute. I kept the code around and left it in the private
-   * constructor with the dummy parameter.
+   * simpler to keep the same logic to recompute.
    *
    * <p>We shall also check the stack and the failed permission against all acceptable patterns and
    * if one matches, we will skip mark it as acceptable.
@@ -357,123 +388,128 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
    *     need all of them which would mean this is an invalid option as we are granting more than we
    *     need
    */
-  @SuppressWarnings("squid:CommentedOutCodeLine" /* no commented out code here */)
   private boolean recompute() {
     domains.clear();
+    isCombined.clear();
     this.failedStackIndex = -1;
-    this.privilegedStackIndex = -1;
     this.failedDomainIndex = -1;
-    this.combinedDomainsStartIndex = -1;
-    final Set<String> grantedDomains = new HashSet<>(this.grantedDomains);
-    final boolean foundFailedDomain = recomputeFromStack(grantedDomains);
+    computeDoPrivilegedIndexes();
+    final boolean isSolution = !grantedDomains.isEmpty() || !doPrivileged.isEmpty();
+    final Set<String> grantedDomains = new HashSet<>(super.grantedDomains);
+    String failedDomain = recomputeFromStack(grantedDomains);
 
-    if (doPrivileged.isEmpty()) {
-      // make sure we account for all inherited/combined domains in the access control context. In
-      // case where a combiner was used, it is possible that additional domains from an inherited
-      // access control context be added to the list that the access controller is checking against.
-      // If we have more than we need to remember as there will be no stack lines that will
-      // correspond to these domains
-      recomputeFromContext(grantedDomains, foundFailedDomain);
-    } // else
-    //     if we are extending privileges for a solution then we are modifying the stack and the
-    //     access control context that would now result from the same exception we are trying to
-    //     recompute. because we are extending the stack before any places where we were combining
-    //     domains there is no way combined domains would leak into this solution
-    //     we are guaranteed that we are doing this before because:
-    //     1- we cannot analyze stack from combined domains as those are not from a stack execution;
-    //        hence we cannot propose to extend privileges there
-    //     2- to combined domains, one must extend privileges via the AccessController which means
-    //        this would already be the last line in the stack we computed before and as such, the
-    //        privileged block we are proposing would be before that particular line any way
+    if (!isSolution) { // only correlate if this is representing the failure and not a solution
+      correlateStackDomains();
+    }
+    failedDomain = recomputeFromContext(grantedDomains, failedDomain);
+    // we are assuming here that the boot domain can never indicate a failure as it should have all
+    // permissions
+    this.failedDomainIndex = (failedDomain != null) ? domains.indexOf(failedDomain) : -1;
     return grantedDomains.isEmpty();
   }
 
-  private int findNextToFindNotAlreadyFound(int lastNextToFind, List<String> contextDomains) {
-    // increase 'nextToFind' to find the next one we didn't already find
-    final int size = contextDomains.size();
-    int nextToFind = lastNextToFind;
+  /**
+   * Check the stack for the first doPrivileged() block and check if that is done on behalf of its
+   * caller and keep track of it such that we can identify its corresponding domain later as not
+   * being a combined one even though the context would potentially report it as such. We do this as
+   * we want to still analyze the corresponding stack line using a doPrivilegedBlock() which we
+   * won't do for non-combined domains.
+   */
+  private void computeDoPrivilegedIndexes() {
+    this.privilegedStackIndex = -1;
+    for (int i = 0; i < stack.size(); i++) {
+      final StackFrameInformation frame = stack.get(i);
 
-    while (++nextToFind < size) {
-      final String nextDomainToFind = contextDomains.get(nextToFind);
+      // note: there cannot be a call to doPrivileged() without another frame following that
+      // as such, doing a blind (i+1) is safe and will never exceed stack.size()
+      if (frame.isDoPrivilegedBlock()) {
+        // found a stack break that we care about, we have to stop after including the next frame
+        // as part of the stack analysis since it is the one calling doPrivileged()
+        //
+        // then we checked if the frame following the call to doPrivileged() is calling it on behalf
+        // of its own caller. this is a special case to handle situations like
+        // javax.security.auth.Subject:422
+        // we therefore ignore that break since we want to account for its callers as part of the
+        // stack
+        // note: there cannot be a call to one those special cases without another frame following
+        // that as such, doing a blind (i+1 or i+2) is safe and will never exceed stack.size()
+        final StackFrameInformation nextFrame = stack.get(i + 1);
 
-      if (nextDomainToFind == null) {
-        // the boot domain/bundle-0 implicitly comes before any other domains so it is "implicitly"
-        // already found so skip it
-      } else if (contextDomains.indexOf(nextDomainToFind) > lastNextToFind) {
+        if (nextFrame.isCallingDoPrivilegedBlockOnBehalfOfCaller()) {
+          this.privilegedStackIndex = i + 2;
+          // we want to preserve the set of domains we imply to come from the stack and not be
+          // combined when we are analyzing a solution
+          if (onBehalfOfCallerPrivilegedDomains.isEmpty()) {
+            onBehalfOfCallerPrivilegedDomains.add(frame.getDomain());
+            onBehalfOfCallerPrivilegedDomains.add(nextFrame.getDomain());
+            onBehalfOfCallerPrivilegedDomains.add(stack.get(i + 2).getDomain());
+          }
+        } else if (privilegedStackIndex == -1) {
+          this.privilegedStackIndex = i + 1;
+        }
         break;
       }
     }
-    return nextToFind;
   }
 
-  private int getNextContextDomainIndexNotComputedFromStack(List<String> contextDomains) {
-    // at this point, all domains we have in 'domains' are computed from the stack and should
-    // correspond to the same in order we have in the context
-    // 'context.domains' have duplicates and possibly null at the top (and elsewhere) whereas
-    // 'domains' doesn't have nulls and doesn't have duplicates
-    final int size = contextDomains.size();
-    // skip null at the top since those are not added to 'domains'
-    int nextToFind = findNextToFindNotAlreadyFound(0, contextDomains);
-
-    for (int i = 0; i < domains.size(); i++) {
-      final String domain = domains.get(i);
-      // the computed domain should be found at or before 'next' otherwise, we just computed a
-      // domain from a frame that doesn't match a domain we got from the access control context
-      final int index = contextDomains.indexOf(domain);
-
-      if (index == -1) {
-        // this means that we computed a domain from the stack that we cannot find in the
-        // access control context. this is a bug and we need to figure out what we missed
-        dumpTroubleshootingInfo(
-            "AN ERROR OCCURRED WHILE ATTEMPTING TO ANALYZE THE SECURITY EXCEPTION,",
-            "A DOMAIN WE COMPUTED FROM THE STACK (INDEX: " + (i + 1) + ") CANNOT BE FOUND IN THE",
-            "CURRENT ACCESS CONTROL CONTEXT (STARTING AT INDEX: " + nextToFind + ")");
-        throw new InternalError(
-            "unable to find a domain computed from the stack in the access control context: "
-                + domain);
-      } else if (index < nextToFind) { // we already found that domain so continue
-      } else if (index == nextToFind) { // we found the next domain we were looking for
-        nextToFind = findNextToFindNotAlreadyFound(nextToFind, contextDomains);
-      } else {
-        // this means that the next domain in the access control context we need to find in our
-        // computed domain list cannot be found. this is a bug and we need to figure out what we
-        // missed
-        dumpTroubleshootingInfo(
-            "AN ERROR OCCURRED WHILE ATTEMPTING TO ANALYZE THE SECURITY EXCEPTION,",
-            "A DOMAIN IN THE CURRENT ACCESS CONTROL CONTEXT (INDEX: " + nextToFind + ") CANNOT",
-            "BE CORRELATED TO ONE COMPUTED FROM THE STACK (INDEX: " + (i + 1) + ")");
-        throw new InternalError(
-            "unable to correlate a domain in the access control context with those computed from the stack : "
-                + domain);
-      }
-    }
-    return (nextToFind < size) ? nextToFind : -1;
-  }
-
-  private void recomputeFromContext(Set<String> grantedDomains, boolean foundFailedDomain) {
+  @Nullable
+  private String recomputeFromContext(Set<String> grantedDomains, @Nullable String failedDomain) {
+    // at this point, we already validated all stack entries, so we should be good to just copy
+    // the context domains here and bring in all combined domains and filter out any stack entries
+    // not in our computed set since those would have been skipped by the fact that we are extending
+    // privileges
     final List<String> contextDomains = context.getDomains();
-    final int nextToFind = getNextContextDomainIndexNotComputedFromStack(contextDomains);
+    final List<String> stackDomains = new ArrayList<>(domains);
+    int j = 0;
 
-    if (nextToFind != -1) {
-      // at this point, all domains starting at 'nextToFind' in the context are deemed combined and
-      // should be considered part of the context
-      this.combinedDomainsStartIndex = domains.size();
-      for (int i = nextToFind; i < contextDomains.size(); i++) {
-        final String domain = contextDomains.get(i);
+    domains.clear();
+    isCombined.clear();
+    for (int i = 0; i < contextDomains.size(); i++) {
+      final String domain = contextDomains.get(i);
 
-        domains.add(domain);
-        if (!foundFailedDomain) {
-          if (!context.isPrivileged(domain)) { // found the place it will fail!!!!
-            foundFailedDomain = true;
-            this.failedDomainIndex = domains.size() - 1;
-          } else {
-            // keep track of the fact that this granted domain helped if it was one
-            // that we artificially granted the permission to
-            grantedDomains.remove(domain);
-          }
+      if (!domains.contains(domain)) {
+        final boolean isACombinedDomain = context.isCombined(i);
+        final boolean isPartOfOnBehalfOfCallerPrivilegedDomains =
+            onBehalfOfCallerPrivilegedDomains.contains(domain);
+
+        // if we didn't compute this domain as a stack domain and it is not combined then this stack
+        // domain must have been skipped in our calculations because of an artificial doPrivileged()
+        // block so ignore it otherwise check if it is a domain implied to be on the stack as they
+        // were part of a call to doPrivileged() on behalf of its caller since it should be reported
+        // by our stack computation and not as a combined one
+        if (!stackDomains.contains(domain)
+            && (!isACombinedDomain || isPartOfOnBehalfOfCallerPrivilegedDomains)) {
+          continue;
         }
+        failedDomain = processContextDomain(grantedDomains, domain, failedDomain);
+        // although it might be marked combined in the context, it is possible that we detected
+        // while analyzing the stack that a doPrivileged() block was done on behalf of a caller, in
+        // such case we want to mark the domain following that stack break as not combined such that
+        // we will still allow us to analyze the corresponding stack line for doPrivileged() block
+        // solution
+        if (isACombinedDomain && !isPartOfOnBehalfOfCallerPrivilegedDomains) {
+          isCombined.set(j);
+        }
+        j++;
       }
     }
+    return failedDomain;
+  }
+
+  @Nullable
+  private String processContextDomain(
+      Set<String> grantedDomains, @Nullable String domain, @Nullable String failedDomain) {
+    domains.add(domain);
+    if (failedDomain == null) {
+      if (!context.isPrivileged(domain)) { // found the place it will fail!!!!
+        return domain;
+      } else {
+        // keep track of the fact that this granted domain helped if it was one
+        // that we artificially granted the permission to
+        grantedDomains.remove(domain);
+      }
+    }
+    return failedDomain;
   }
 
   private void recomputeAcceptablePattern(
@@ -491,69 +527,79 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
     }
   }
 
-  @SuppressWarnings("squid:S1066" /* keeping ifs separate actually increase readability here */)
-  private int reduceLastFrameToCheckIfDoPrivilegedBlock(
-      final StackFrameInformation frame, int index, int last) {
-    if (frame.isDoPrivilegedBlock()) {
-      int increment = 1;
-
-      // note: there cannot be a call to doPrivileged() without another frame following that
-      // as such, doing a blind (index+increment) is safe and will never exceed stack.size()
-      if (stack.get(index + 1).isCallingDoPrivilegedBlockOnBehalfOfCaller()) {
-        // we check if the frame following the call to doPrivileged() is calling it on behalf of its
-        // own caller. this is a special case to handle situations like
-        // javax.security.auth.Subject:422
-        // we therefore advance the index one more since we want to account for the its caller as
-        // part of the stack break
-        // note: there cannot be a call to one those special cases without another frame following
-        // that
-        // as such, doing a blind increment++ is safe and will never exceed stack.size()
-        increment++;
-      }
-      // found a stack break that we care about, we have to stop after including the next frame
-      // as part of the stack since it is the one calling doPrivileged()
-      if (privilegedStackIndex == -1) {
-        this.privilegedStackIndex = index + increment;
-      }
-      return index + increment + 1; // stop after next
-    }
-    return last;
-  }
-
-  private boolean recomputeFromStack(Set<String> grantedDomains) {
+  @Nullable
+  private String recomputeFromStack(Set<String> grantedDomains) {
     final List<Pattern> stackPatterns =
         SecurityCheckInformation.ACCEPTABLE_PATTERNS
             .stream()
             .filter(p -> p.matchAllPermissions(permissionInfos))
             .map(Pattern::new)
             .collect(Collectors.toList());
-    boolean foundFailedDomain = false;
-    int last = stack.size();
+    String failedDomain = null;
+    // +1 on the privilegedStackIndex is to ensure we loop through privilegedStackIndex below
+    final int last = (privilegedStackIndex != -1) ? (privilegedStackIndex + 1) : stack.size();
 
     for (int i = 0; i < last; i++) {
       final StackFrameInformation frame = stack.get(i);
 
-      last = reduceLastFrameToCheckIfDoPrivilegedBlock(frame, i, last);
       recomputeAcceptablePattern(stackPatterns, frame, i);
       final String domain = frame.getDomain();
 
-      if ((domain != null) && !domains.contains(domain)) {
+      if (!domains.contains(domain)) {
         domains.add(domain);
       }
-      if (!foundFailedDomain) {
-        if (!frame.isPrivileged(
-            context.getPrivilegedDomains())) { // found the place where it failed!
-          foundFailedDomain = true;
+      if (failedDomain == null) {
+        if (!frame.isPrivileged(context.getPrivilegedDomains())) { // found where it failed!
+          failedDomain = domain;
           this.failedStackIndex = i;
-          this.failedDomainIndex = domains.indexOf(domain);
         } else {
           // keep track of the fact that this granted domain helped if it was one
           // that we artificially granted the permission to
-          grantedDomains.remove(frame.getDomain());
+          grantedDomains.remove(domain);
         }
       }
     }
-    return foundFailedDomain;
+    return failedDomain;
+  }
+
+  private void correlateStackDomains() {
+    // each domain we computed here should also be present in the context's domains
+    final String bootDomain =
+        debug.isOSGi() ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN;
+    final List<String> contextDomains = context.getDomains();
+
+    for (int i = 0; i < domains.size(); i++) {
+      final String domain = domains.get(i);
+      final int index = contextDomains.indexOf(domain);
+
+      // for some reasons the AccessController doesn't always include the boot domain as part of
+      // its stack context even though by design, our breakpoint is inside that class
+      // since when we calculate the stack we see that domain, this would cause a failure here
+      // so let's skip it
+      if ((index == -1) && (domain != null)) {
+        dumpTroubleshootingInfo(
+            "AN ERROR OCCURRED WHILE ATTEMPTING TO ANALYZE THE SECURITY EXCEPTION,",
+            "A DOMAIN WE COMPUTED FROM THE STACK (INDEX: " + i + ") CANNOT BE FOUND IN THE",
+            "CURRENT ACCESS CONTROL CONTEXT");
+        throw new InternalError(
+            "unable to find a domain computed from the stack in the access control context: "
+                + Objects.toString(domain, bootDomain));
+      }
+    }
+    // each stack domains defined in the context should be accounted for here
+    for (int i = 0; i < contextDomains.size(); i++) {
+      final String domain = contextDomains.get(i);
+
+      if (!context.isCombined(i) && !domains.contains(domain)) {
+        dumpTroubleshootingInfo(
+            "AN ERROR OCCURRED WHILE ATTEMPTING TO ANALYZE THE SECURITY EXCEPTION,",
+            "A DOMAIN IN THE CURRENT ACCESS CONTROL CONTEXT (INDEX: " + i + ") CANNOT",
+            "BE CORRELATED TO ONE COMPUTED FROM THE STACK");
+        throw new InternalError(
+            "unable to correlate a domain in the access control context with those computed from the stack: "
+                + Objects.toString(domain, bootDomain));
+      }
+    }
   }
 
   private List<SecuritySolution> analyze0() {
@@ -583,12 +629,14 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
 
   private void analyzeDoPrivilegedBlocks(List<SecuritySolution> solutions) {
     // now check if we could extend the privileges of a domain that comes up
-    // before which already has the permission
+    // before which already has the permission and which was not marked combined
     for (int i = failedStackIndex - 1; i >= 0; i--) {
       final StackFrameInformation frame = stack.get(i);
+      final String domain = frame.getDomain();
 
       if (frame.isPrivileged(context.getPrivilegedDomains())
-          && frame.canDoPrivilegedBlocks(debug)) {
+          && frame.canDoPrivilegedBlocks(debug)
+          && !isCombined(domain)) {
         solutions.addAll(new SecurityCheckInformation(this, i).analyze0());
       }
     }
@@ -631,11 +679,10 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
 
   @SuppressWarnings("squid:S106" /* this is a console application */)
   private void dumpContext(boolean osgi) {
+    final String bootDomain =
+        debug.isOSGi() ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN;
+
     System.out.println(ACDebugger.PREFIX + "Context:");
-    System.out.println(
-        ACDebugger.PREFIX
-            + "     "
-            + (osgi ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN));
     for (int i = 0; i < domains.size(); i++) {
       final String domain = domains.get(i);
 
@@ -644,10 +691,8 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
               + " "
               + ((i == failedDomainIndex) ? "--> " : "    ")
               + (context.isPrivileged(domain) ? "" : "*")
-              + domain
-              + (((i >= combinedDomainsStartIndex) && (combinedDomainsStartIndex != -1))
-                  ? " (combined)"
-                  : ""));
+              + Objects.toString(domain, bootDomain)
+              + (isCombined(i) ? " (combined)" : ""));
     }
   }
 
@@ -680,6 +725,9 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
 
   @SuppressWarnings("squid:S106" /* this is a console application */)
   private void dumpTroubleshootingInfo(String... msg) {
+    final String bootDomain =
+        debug.isOSGi() ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN;
+
     System.err.println(ACDebugger.PREFIX);
     System.err.println(ACDebugger.PREFIX + SecurityCheckInformation.DOUBLE_LINES);
     Stream.of(msg).map(ACDebugger.PREFIX::concat).forEach(System.err::println);
@@ -695,12 +743,8 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
       System.err.println(ACDebugger.PREFIX + "ACCEPTABLE PERMISSIONS: ");
       System.err.println(ACDebugger.PREFIX + "    " + getAcceptablePermissions());
     }
-    context.dumpTroubleshootingInfo(debug.isOSGi());
+    context.dumpTroubleshootingInfo();
     System.err.println(ACDebugger.PREFIX + "COMPUTED CONTEXT:");
-    System.err.println(
-        ACDebugger.PREFIX
-            + "  "
-            + (debug.isOSGi() ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN));
     for (int i = 0; i < domains.size(); i++) {
       final String domain = domains.get(i);
 
@@ -708,10 +752,8 @@ class SecurityCheckInformation extends SecuritySolution implements SecurityFailu
           ACDebugger.PREFIX
               + "  "
               + (context.isPrivileged(domain) ? "" : "*")
-              + domain
-              + (((i >= combinedDomainsStartIndex) && (combinedDomainsStartIndex != -1))
-                  ? " (combined)"
-                  : ""));
+              + Objects.toString(domain, bootDomain)
+              + (isCombined(i) ? " (combined)" : ""));
     }
     System.err.println(ACDebugger.PREFIX + "STACK:");
     final int size = stack.size();

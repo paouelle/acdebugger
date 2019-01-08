@@ -16,7 +16,6 @@ package org.codice.acdebugger.breakpoints;
 // NOSONAR - squid:S1191 - Using the Java debugger API
 
 import com.google.common.annotations.VisibleForTesting;
-import com.sun.jdi.ArrayReference; // NOSONAR
 import com.sun.jdi.EnhancedStackFrame; // NOSONAR
 import com.sun.jdi.ObjectReference; // NOSONAR
 import com.sun.jdi.StackFrame; // NOSONAR
@@ -61,15 +60,13 @@ public class AccessControlContextCheckProcessor implements BreakpointProcessor {
   public void process(BreakpointInfo info, Debug debug) throws Exception {
     final ThreadReference thread = debug.thread();
     final ReflectionUtil reflection = debug.reflection();
-    final ArrayReference context =
-        reflection.get(
-            thread.frame(0).thisObject(), "context", "[Ljava/security/ProtectionDomain;");
+    final ObjectReference acc = thread.frame(0).thisObject();
     final EnhancedStackFrame frame = enhance(thread.frame(0));
     final int local_i =
         reflection.fromMirror(
             frame.getValue(AccessControlContextCheckProcessor.LOCAL_I_SLOT_INDEX, "I"));
     final ObjectReference permission = (ObjectReference) frame.getArgumentValues().get(0);
-    final SecurityCheckInformation security = process(debug, context, local_i, permission);
+    final SecurityCheckInformation security = process(debug, acc, local_i, permission);
 
     if (security.getFailedDomain() != null) {
       // check if we have only one solution and that solution is to only grant permission(s)
@@ -109,11 +106,8 @@ public class AccessControlContextCheckProcessor implements BreakpointProcessor {
     "squid:S00112" /* Forced to by the Java debugger API */
   })
   SecurityCheckInformation process(
-      Debug debug, ArrayReference context, int local_i, ObjectReference permission)
-      throws Exception {
+      Debug debug, ObjectReference acc, int local_i, ObjectReference permission) throws Exception {
     return new SecurityCheckInformation(
-        debug,
-        new AccessControlContextInfo( // domains in the context can only be object references
-            debug, (List<ObjectReference>) (List) context.getValues(), local_i, permission));
+        debug, new AccessControlContextInfo(debug, acc, local_i, permission));
   }
 }

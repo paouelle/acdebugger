@@ -14,7 +14,7 @@ This option is not on by default as it can slow down the system a bit.
 To run the debugger tool, open the debugger project in IDE and run the `org.codice.acdebuger.Main.main()` method. Options can be set in the corresponding IDE `Run/Debug Configuration`.
 
 The maven build can be used to produce an executable jar. The jar can
-be run by doing: `java -jar acdebugger-debugger-1.5-jar-with-dependencies.jar [options]>`
+be run by doing: `java -jar acdebugger-debugger-1.x-jar-with-dependencies.jar [options]>`
 
 ### Typical Output
 For OSGi containers, the typical output will be:

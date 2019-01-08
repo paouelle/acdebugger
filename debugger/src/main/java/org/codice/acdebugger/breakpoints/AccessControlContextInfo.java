@@ -16,22 +16,40 @@ package org.codice.acdebugger.breakpoints;
 // NOSONAR - squid:S1191 - Using the Java debugger API
 
 import com.google.common.annotations.VisibleForTesting;
+import com.sun.jdi.ArrayReference; // NOSONAR
+import com.sun.jdi.ClassType; // NOSONAR
+import com.sun.jdi.Method; // NOSONAR
 import com.sun.jdi.ObjectReference; // NOSONAR
+import com.sun.jdi.Type; // NOSONAR
+import java.security.AccessController;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import org.codice.acdebugger.ACDebugger;
 import org.codice.acdebugger.api.Debug;
 import org.codice.acdebugger.api.LocationUtil;
 import org.codice.acdebugger.api.PermissionUtil;
+import org.codice.acdebugger.api.ReflectionUtil;
 import org.codice.acdebugger.api.StackFrameInformation;
 
 /** Class used to hold access control context information */
 public class AccessControlContextInfo {
+  private static volatile ClassType accessControllerClass = null;
+
+  private static volatile Method getStackAccessControlContextMethod = null;
+
+  /** The associated debug session. */
+  private final Debug debug;
+
+  private final ObjectReference acc;
   private final ObjectReference permission;
   private final Set<String> permissionInfos;
+  private final Type combiner;
 
   /** list of protection domains (i.e. bundle name/domain location) in the context */
   private final List<ObjectReference> domainReferences;
@@ -41,6 +59,25 @@ public class AccessControlContextInfo {
    * and duplicates.
    */
   private final List<String> domains;
+
+  /**
+   * list of protection domains in the stack as reported by {@link
+   * AccessController#getStackAccessControlContext()}
+   */
+  private final List<ObjectReference> stackDomainReferences;
+
+  /**
+   * list of protection domains in the stack (i.e. bundle name/domain location) in the context. It
+   * can have nulls and duplicates.
+   */
+  private final List<String> stackDomains;
+
+  /**
+   * bit set indicating if an entry in the domains list was combined. An entry that came from the
+   * stack could potentially be surrounded by a <code>doPrivileged()</code> block and be correlated
+   * with the stack information retrieved from the current thread.
+   */
+  private final BitSet isCombined;
 
   /**
    * The index of the first domain in the list of domains that is reporting not being granted the
@@ -64,51 +101,80 @@ public class AccessControlContextInfo {
    * Creates a new access control context information.
    *
    * @param debug the current debug session
-   * @param domainReferences the list of domains on the stack for which to get information
+   * @param acc the access control context object
    * @param currentDomainIndex the index of the first domain (a.k.a. the current domain) in the
    *     above list that reported not being granted the specified permission
    * @param permission the permission being checked
    */
   public AccessControlContextInfo(
-      Debug debug,
-      List<ObjectReference> domainReferences,
-      int currentDomainIndex,
-      ObjectReference permission) {
-    final PermissionUtil permissions = debug.permissions();
+      Debug debug, ObjectReference acc, int currentDomainIndex, ObjectReference permission) {
+    final ReflectionUtil reflection = debug.reflection();
 
+    AccessControlContextInfo.init(reflection);
+    this.debug = debug;
+    final PermissionUtil permissions = debug.permissions();
+    final ArrayReference context =
+        reflection.get(acc, "context", "[Ljava/security/ProtectionDomain;");
+    final ObjectReference stackAcc =
+        AccessControlContextInfo.getStackAccessControlContext(reflection);
+    final ArrayReference stackContext =
+        reflection.get(stackAcc, "context", "[Ljava/security/ProtectionDomain;");
+
+    this.acc = acc;
+    final ObjectReference combinerReference =
+        reflection.get(acc, "combiner", "Ljava/security/DomainCombiner;");
+
+    this.combiner = (combinerReference != null) ? combinerReference.type() : null;
     this.permission = permission;
     this.permissionInfos = permissions.getPermissionStrings(permission);
     this.currentDomainIndex = currentDomainIndex;
-    this.domainReferences = domainReferences;
+    // domains in contexts can only be object references
+    this.domainReferences = (List<ObjectReference>) (List) context.getValues();
+    this.stackDomainReferences = (List<ObjectReference>) (List) stackContext.getValues();
     this.domains = new ArrayList<>(domainReferences.size());
+    this.stackDomains = new ArrayList<>(stackDomainReferences.size());
+    this.isCombined = new BitSet(domainReferences.size());
     this.privilegedDomains = new HashSet<>(domainReferences.size() * 3 / 2);
     privilegedDomains.add(null); // boot domain/bundle-0 always have permissions
-    computeDomainInfo(debug.locations(), permissions);
+    computeInfo(debug.locations(), permissions, reflection);
     this.currentDomainReference = domainReferences.get(currentDomainIndex);
     this.currentDomain = domains.get(currentDomainIndex);
   }
 
   @VisibleForTesting
+  @SuppressWarnings("squid:S00107" /* Used for testing */)
   AccessControlContextInfo(
+      Debug debug,
+      ObjectReference acc,
+      Type combiner,
       List<ObjectReference> domainReferences,
       List<String> domains,
+      List<ObjectReference> stackDomainReferences,
+      List<String> stackDomains,
+      BitSet isCombined,
       int currentDomainIndex,
       ObjectReference permission,
       Set<String> permissionInfos,
       Set<String> privilegedDomains) {
+    this.debug = debug;
+    this.acc = acc;
+    this.combiner = combiner;
     this.permission = permission;
     this.permissionInfos = permissionInfos;
     this.currentDomainIndex = currentDomainIndex;
     this.domainReferences = domainReferences;
     this.domains = domains;
+    this.stackDomainReferences = stackDomainReferences;
+    this.stackDomains = stackDomains;
+    this.isCombined = isCombined;
     this.currentDomainReference = domainReferences.get(currentDomainIndex);
     this.currentDomain = domains.get(currentDomainIndex);
     this.privilegedDomains = privilegedDomains;
   }
 
   /**
-   * Creates a new access control context information from another one corresponding corresponding
-   * to a scenario where the specified domain would have been granted the permission.
+   * Creates a new access control context information from another one corresponding to a scenario
+   * where the specified domain would have been granted the permission.
    *
    * @param info the access control context information being cloned
    * @param domain the domain that would have been granted the permission
@@ -116,8 +182,14 @@ public class AccessControlContextInfo {
    */
   private AccessControlContextInfo(AccessControlContextInfo info, String domain) {
     this(
+        info.debug,
+        info.acc,
+        info.combiner,
         info.domainReferences,
         info.domains,
+        info.stackDomainReferences,
+        info.stackDomains,
+        info.isCombined,
         info.currentDomainIndex,
         info.permission,
         info.permissionInfos,
@@ -175,6 +247,18 @@ public class AccessControlContextInfo {
   }
 
   /**
+   * Checks if the specified domain index corresponds to a combined domain which means it cannot be
+   * analyzed based on its stack location.
+   *
+   * @param index the index of the domain to check
+   * @return <code>true</code> if the specified domain is considered to have been combined; <code>
+   *     false</code> otherwise
+   */
+  public boolean isCombined(int index) {
+    return isCombined.get(index);
+  }
+
+  /**
    * Checks if the specified domain is privileged.
    *
    * @param domain the domain to check
@@ -206,32 +290,171 @@ public class AccessControlContextInfo {
   }
 
   @SuppressWarnings("squid:S106" /* this is a console application */)
-  void dumpTroubleshootingInfo(boolean osgi) {
+  void dumpTroubleshootingInfo(String... msg) {
+    System.err.println(ACDebugger.PREFIX);
+    System.err.println(ACDebugger.PREFIX + SecurityCheckInformation.DOUBLE_LINES);
+    Stream.of(msg).map(ACDebugger.PREFIX::concat).forEach(System.err::println);
+    System.err.println(
+        ACDebugger.PREFIX
+            + "PLEASE REPORT AN ISSUE WITH THE FOLLOWING INFORMATION AND INSTRUCTIONS");
+    System.err.println(ACDebugger.PREFIX + "ON HOW TO REPRODUCE IT");
+    System.err.println(ACDebugger.PREFIX + SecurityCheckInformation.DOUBLE_LINES);
+    dumpTroubleshootingInfo();
+  }
+
+  @SuppressWarnings("squid:S106" /* this is a console application */)
+  void dumpTroubleshootingInfo() {
+    final ReflectionUtil reflection = debug.reflection();
+
     System.err.println(ACDebugger.PREFIX + "LOCAL 'i' VARIABLE: " + currentDomainIndex);
     System.err.println(
         ACDebugger.PREFIX
             + "CURRENT DOMAIN: "
             + currentDomain
-            + " >"
+            + " <"
             + currentDomainReference
             + '>');
-    System.err.println(ACDebugger.PREFIX + "ACCESS CONTROL CONTEXT:");
+    System.err.println(ACDebugger.PREFIX + "ACCESS CONTROL CONTEXT: <" + acc + '>');
+    System.err.println(ACDebugger.PREFIX + "  -- combiner: " + combiner);
+    System.err.println(
+        ACDebugger.PREFIX
+            + "  -- privileged context: "
+            + reflection.get(acc, "privilegedContext", "Ljava/security/AccessControlContext;"));
+    System.err.println(
+        ACDebugger.PREFIX
+            + "  -- parent context: "
+            + reflection.get(acc, "parent", "Ljava/security/AccessControlContext;"));
+    System.err.println(
+        ACDebugger.PREFIX + "  -- isPrivileged: " + reflection.get(acc, "isPrivileged", "Z"));
+    System.err.println(
+        ACDebugger.PREFIX + "  -- isAuthorized: " + reflection.get(acc, "isAuthorized", "Z"));
+    System.err.println(
+        ACDebugger.PREFIX + "  -- isWrapped: " + reflection.get(acc, "isWrapped", "Z"));
+    System.err.println(
+        ACDebugger.PREFIX + "  -- isLimited: " + reflection.get(acc, "isLimited", "Z"));
+    dumpDomains(domainReferences, domains, isCombined);
+    System.err.println(ACDebugger.PREFIX + "STACK ACCESS CONTROL CONTEXT:");
+    dumpDomains(stackDomainReferences, stackDomains, new BitSet());
+  }
+
+  @SuppressWarnings("squid:S106" /* this is a console application */)
+  private void dumpDomains(
+      List<ObjectReference> domainReferences, List<String> domains, BitSet isCombined) {
+    final String bootDomain =
+        debug.isOSGi() ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN;
+
     for (int i = 0; i < domains.size(); i++) {
       final ObjectReference domainReference = domainReferences.get(i);
-      String domain = domains.get(i);
+      final String domain = domains.get(i);
       final boolean privileged = isPrivileged(domain);
 
-      if (domain == null) {
-        domain = osgi ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN;
-      }
       System.err.println(
           ACDebugger.PREFIX
               + "  "
               + (privileged ? "" : "*")
-              + domain
-              + " <"
+              + Objects.toString(domain, bootDomain)
+              + (isCombined.get(i) ? " (combined) <" : " <")
               + domainReference
               + '>');
+    }
+  }
+
+  private void computeInfo(
+      LocationUtil locations, PermissionUtil permissions, ReflectionUtil reflection) {
+    computeStackDomainInfo(locations, permissions);
+    computeDomainInfo(locations, permissions);
+    computeIsCombined(reflection);
+  }
+
+  private void computeIsCombined(ReflectionUtil reflection) {
+    if (reflection.isAssignableFrom("Ljavax/security/auth/SubjectDomainCombiner;", combiner)) {
+      // this combiner is known to add new entries only after the stack
+      computeIsCombinedAfterStack();
+    } else if (combiner == null) { // inherited entries are all added before the stack
+      computeIsCombinedBeforeStack();
+    } else { // we can't really tell - so mark all entries combined
+      dumpTroubleshootingInfo("AN UNKNOWN COMBINER WAS JUST DISCOVERED: " + combiner);
+      isCombined.set(0, domainReferences.size());
+    }
+  }
+
+  // in this case, we should find the stack as is and then following that new domains not already
+  // defined by the stack context
+  private void computeIsCombinedAfterStack() {
+    for (int i = 0; i < stackDomains.size(); i++) {
+      final String stackDomain = stackDomains.get(i);
+      final String domain = domains.get(i);
+
+      if (!Objects.equals(stackDomain, domain)) { // this should not happen
+        final String bootDomain =
+            debug.isOSGi() ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN;
+
+        dumpTroubleshootingInfo(
+            "AN ERROR OCCURRED WHILE ATTEMPTING TO ANALYZE THE SECURITY EXCEPTION,",
+            "A DOMAIN IN THE CURRENT ACCESS CONTROL CONTEXT (INDEX: " + i + ") DOES NOT",
+            "MATCH THE CORRESPONDING DOMAIN IN THE ACCESS CONTROL CONTEXT STACK");
+        throw new InternalError(
+            "unable to correlate the access control context and the access control context stack: "
+                + domain
+                + " and "
+                + Objects.toString(stackDomain, bootDomain));
+      }
+    }
+    for (int i = stackDomainReferences.size(); i < domainReferences.size(); i++) {
+      isCombined.set(i);
+    }
+  }
+
+  // in this case, we should find part of the stack after combined domains. Part because if some
+  // domains from the stack were already combined before, they will not be duplicated so there might
+  // be missing stack domain entries (as long as they exist before the beginning of the stack)
+  private void computeIsCombinedBeforeStack() {
+    isCombined.set(0, domains.size()); // assume all combined until proven otherwise
+    for (int i = 0; i < stackDomains.size(); i++) {
+      final String stackDomain = stackDomains.get(i);
+
+      if (!domains.contains(stackDomain)) { // this should not happen
+        final String bootDomain =
+            debug.isOSGi() ? StackFrameInformation.BUNDLE0 : StackFrameInformation.BOOT_DOMAIN;
+
+        dumpTroubleshootingInfo(
+            "AN ERROR OCCURRED WHILE ATTEMPTING TO ANALYZE THE SECURITY EXCEPTION,",
+            "A DOMAIN IN THE CURRENT ACCESS CONTROL CONTEXT STACK (INDEX: " + i + ") CANNOT",
+            "BE FOUND IN THE ACCESS CONTROL CONTEXT STACK");
+        throw new InternalError(
+            "unable to correlate the access control context stack with the access control context: "
+                + Objects.toString(stackDomain, bootDomain));
+      }
+    }
+    for (int i = 0; i < domains.size(); i++) {
+      final int j = stackDomains.indexOf(domains.get(i));
+
+      if (j != -1) {
+        isCombined.clear(i);
+      } else {
+        // if we get here than the current domain is not from the stack which means that everything
+        // before will be considered combined (event if it was also in the stack)
+        isCombined.set(0, i + 1);
+      }
+    }
+  }
+
+  private void computeStackDomainInfo(LocationUtil locations, PermissionUtil permissions) {
+    for (int i = 0; i < stackDomainReferences.size(); i++) {
+      final ObjectReference domainReference = stackDomainReferences.get(i);
+      String domain = locations.get(domainReference);
+
+      if ((domain == null) && !permissions.implies(domainReference, permission)) { // check VM
+        // domain is null because it is some protection domain we cannot correlate to a domain
+        // location or a bundle name and we do not have permissions which means that it cannot be
+        // the boot domain/bundle location which has all permissions
+        // we therefore have a situation we cannot debug. The SecurityCheckInformation will
+        // actually
+        // report this error when it is trying to match computed domains with the ones here
+        // -- change the location to an unknown one
+        domain = "unknown-" + domainReference;
+      }
+      stackDomains.add(domain);
     }
   }
 
@@ -262,13 +485,34 @@ public class AccessControlContextInfo {
       } else if (domain == null) {
         // domain is null because it is some protection domain we cannot correlate to a domain
         // location or a bundle name and we do not have permissions which means that it cannot be
-        // the boot domain/ bundle location which has all permissions
+        // the boot domain/bundle location which has all permissions
         // we therefore have a situation we cannot debug. The SecurityCheckInformation will actually
         // report this error when it is trying to match computed domains with the ones here
         // -- change the location to an unknown one
         domain = "unknown-" + domainReference;
       }
       domains.add(domain);
+    }
+  }
+
+  private static void init(ReflectionUtil reflection) {
+    if (AccessControlContextInfo.accessControllerClass == null) {
+      final ClassType clazz = reflection.getClass("Ljava/security/AccessController;");
+
+      AccessControlContextInfo.accessControllerClass = clazz;
+      AccessControlContextInfo.getStackAccessControlContextMethod =
+          reflection.findMethod(
+              clazz, "getStackAccessControlContext", "()Ljava/security/AccessControlContext;");
+    }
+  }
+
+  private static ObjectReference getStackAccessControlContext(ReflectionUtil reflection) {
+    try {
+      return reflection.invokeStatic(
+          AccessControlContextInfo.accessControllerClass,
+          AccessControlContextInfo.getStackAccessControlContextMethod);
+    } catch (Exception e) {
+      throw new IllegalStateException(e);
     }
   }
 

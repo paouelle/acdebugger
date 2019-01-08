@@ -207,6 +207,11 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
   )
 
   @Shared
+  def DEBUG = Stub(Debug)
+  @Shared
+  def SUBJECT_DOMAIN_COMBINER = MockClassType('SUBJECT_DOMAIN_COMBINER', 'Ljavax/security/auth/SubjectDomainCombiner;')
+
+  @Shared
   def STACK = [
       ACC_CHECK_FRAME,
       FRAME1A,
@@ -221,13 +226,13 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
   @Shared
   def BUNDLES = [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE1, BUNDLE4, BUNDLE5]
   @Shared
-  def ACC1 = new AccessControlContextInfo(DOMAINS, BUNDLES, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3] as Set<String>)
+  def ACC1 = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS, BUNDLES, DOMAINS, BUNDLES, new BitSet(), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3] as Set<String>)
   @Shared
-  def ACC2 = new AccessControlContextInfo(DOMAINS, BUNDLES, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4] as Set<String>)
+  def ACC2 = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS, BUNDLES, DOMAINS, BUNDLES, new BitSet(), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4] as Set<String>)
   @Shared
-  def ACC_WITH_COMBINED_DOMAIN = new AccessControlContextInfo(DOMAINS + COMBINED_DOMAIN, BUNDLES + COMBINED_BUNDLE, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3, COMBINED_BUNDLE] as Set<String>)
+  def ACC_WITH_COMBINED_DOMAIN = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS + COMBINED_DOMAIN, BUNDLES + COMBINED_BUNDLE, DOMAINS, BUNDLES, new BitSet([0b10000000] as long[]), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3, COMBINED_BUNDLE] as Set<String>)
   @Shared
-  def ACC2_WITH_COMBINED_DOMAIN = new AccessControlContextInfo(DOMAINS + COMBINED_DOMAIN, BUNDLES + COMBINED_BUNDLE, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3] as Set<String>)
+  def ACC2_WITH_COMBINED_DOMAIN = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS + COMBINED_DOMAIN, BUNDLES + COMBINED_BUNDLE, DOMAINS, BUNDLES, new BitSet([0b10000000] as long[]), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE2, BUNDLE3] as Set<String>)
   @Shared
   def SOLUTION1 = new SecuritySolution(STACK, StackFrameInformation.doPrivilegedAt(STACK, 1), PERMISSION_INFOS, [] as Set<String>, [FRAME1A])
   @Shared
@@ -246,6 +251,16 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
   def SOLUTION8 = new SecuritySolution(STACK, PERMISSION_INFOS, [BUNDLE5] as Set<String>, [])
   @Shared
   def SOLUTION9 = new SecuritySolution(STACK, PERMISSION_INFOS, [BUNDLE4, BUNDLE5, COMBINED_BUNDLE] as Set<String>, [])
+  @Shared
+  def SOLUTION1_WITH_COMBINER = new SecuritySolution(STACK, StackFrameInformation.doPrivilegedAt(STACK, 1), PERMISSION_INFOS, [COMBINED_BUNDLE] as Set<String>, [FRAME1A])
+  @Shared
+  def SOLUTION2_WITH_COMBINER = new SecuritySolution(STACK, StackFrameInformation.doPrivilegedAt(STACK, 2), PERMISSION_INFOS, [COMBINED_BUNDLE] as Set<String>, [FRAME2A])
+  @Shared
+  def SOLUTION3_WITH_COMBINER = new SecuritySolution(STACK, StackFrameInformation.doPrivilegedAt(STACK, 3), PERMISSION_INFOS, [COMBINED_BUNDLE] as Set<String>, [FRAME3])
+  @Shared
+  def SOLUTION4_WITH_COMBINER = new SecuritySolution(STACK, StackFrameInformation.doPrivilegedAt(STACK, 4), PERMISSION_INFOS, [COMBINED_BUNDLE] as Set<String>, [FRAME1B])
+  @Shared
+  def SOLUTION5_WITH_COMBINER = new SecuritySolution(STACK, StackFrameInformation.doPrivilegedAt(STACK, 5), PERMISSION_INFOS, [BUNDLE4, COMBINED_BUNDLE] as Set<String>, [FRAME4])
 
   @Shared
   def STACK_WITH_PROXY = [
@@ -259,11 +274,11 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
   @Shared
   def BUNDLES_WITH_PROXY = [null, BUNDLE1, PROXY_BUNDLE, BUNDLE2]
   @Shared
-  def ACC1_WITH_PROXY = new AccessControlContextInfo(DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, 1, PERMISSION, PERMISSION_INFOS, [null, BUNDLE2] as Set<String>)
+  def ACC1_WITH_PROXY = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, new BitSet(), 1, PERMISSION, PERMISSION_INFOS, [null, BUNDLE2] as Set<String>)
   @Shared
-  def ACC2_WITH_PROXY = new AccessControlContextInfo(DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
+  def ACC2_WITH_PROXY = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, new BitSet(), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
   @Shared
-  def ACC3_WITH_PROXY = new AccessControlContextInfo(DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, 3, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, PROXY_BUNDLE] as Set<String>)
+  def ACC3_WITH_PROXY = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, DOMAINS_WITH_PROXY, BUNDLES_WITH_PROXY, new BitSet(), 3, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, PROXY_BUNDLE] as Set<String>)
   @Shared
   def SOLUTION1_WITH_PROXY = new SecuritySolution(STACK_WITH_PROXY, StackFrameInformation.doPrivilegedAt(STACK_WITH_PROXY, 1), PERMISSION_INFOS, [BUNDLE1] as Set<String>, [FRAME1A])
   @Shared
@@ -289,21 +304,21 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
       FRAME5
   ]
   @Shared
-  def DOMAINS_WITH_DO_PRIVILEGED = [BOOT_DOMAIN, DOMAIN1, DOMAIN2, DOMAIN2, DOMAIN3, PROXY_DOMAIN, DOMAIN1, DOMAIN4, COMBINED_DOMAIN]
+  def DOMAINS_WITH_DO_PRIVILEGED = [BOOT_DOMAIN, DOMAIN1, DOMAIN2, DOMAIN2, DOMAIN3, PROXY_DOMAIN, DOMAIN1, DOMAIN4]
   @Shared
-  def BUNDLES_WITH_DO_PRIVILEGED = [null, BUNDLE1, BUNDLE2, BUNDLE2, BUNDLE3, PROXY_BUNDLE, BUNDLE1, BUNDLE4, COMBINED_BUNDLE]
+  def BUNDLES_WITH_DO_PRIVILEGED = [null, BUNDLE1, BUNDLE2, BUNDLE2, BUNDLE3, PROXY_BUNDLE, BUNDLE1, BUNDLE4]
   @Shared
-  def ACC_WITH_DO_PRIVILEGED = new AccessControlContextInfo(DOMAINS_WITH_DO_PRIVILEGED, BUNDLES_WITH_DO_PRIVILEGED, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
+  def ACC_WITH_DO_PRIVILEGED = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS_WITH_DO_PRIVILEGED + COMBINED_DOMAIN, BUNDLES_WITH_DO_PRIVILEGED + COMBINED_BUNDLE, DOMAINS_WITH_DO_PRIVILEGED, BUNDLES_WITH_DO_PRIVILEGED, new BitSet([0b100000000] as long[]), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
   @Shared
-  def SOLUTION1_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 1), PERMISSION_INFOS, [] as Set<String>, [FRAME1A])
+  def SOLUTION1_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 1), PERMISSION_INFOS, [COMBINED_BUNDLE] as Set<String>, [FRAME1A])
   @Shared
-  def SOLUTION2_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 2), PERMISSION_INFOS, [BUNDLE2] as Set<String>, [FRAME2A])
+  def SOLUTION2_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 2), PERMISSION_INFOS, [BUNDLE2, COMBINED_BUNDLE] as Set<String>, [FRAME2A])
   @Shared
-  def SOLUTION3_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 3), PERMISSION_INFOS, [BUNDLE2] as Set<String>, [FRAME2B])
+  def SOLUTION3_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 3), PERMISSION_INFOS, [BUNDLE2, COMBINED_BUNDLE] as Set<String>, [FRAME2B])
   @Shared
-  def SOLUTION4_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 4), PERMISSION_INFOS, [BUNDLE2, BUNDLE3] as Set<String>, [FRAME3])
+  def SOLUTION4_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 4), PERMISSION_INFOS, [BUNDLE2, BUNDLE3, COMBINED_BUNDLE] as Set<String>, [FRAME3])
   @Shared
-  def SOLUTION5_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 6), PERMISSION_INFOS, [BUNDLE2, BUNDLE3, PROXY_BUNDLE] as Set<String>, [FRAME1B])
+  def SOLUTION5_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_PRIVILEGED, 6), PERMISSION_INFOS, [BUNDLE2, BUNDLE3, PROXY_BUNDLE, COMBINED_BUNDLE] as Set<String>, [FRAME1B])
   @Shared
   def SOLUTION6_WITH_DO_PRIVILEGED = new SecuritySolution(STACK_WITH_DO_PRIVILEGED, PERMISSION_INFOS, [BUNDLE2, BUNDLE3, PROXY_BUNDLE, BUNDLE4, COMBINED_BUNDLE] as Set<String>, [])
 
@@ -321,17 +336,17 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
       FRAME4 // ----------------
   ]
   @Shared
-  def DOMAINS_WITH_DO_AS = [BOOT_DOMAIN, DOMAIN1, DOMAIN2, DOMAIN2, BOOT_DOMAIN, BOOT_DOMAIN, DOMAIN3, DOMAIN1, DOMAIN4, COMBINED_DOMAIN]
+  def DOMAINS_WITH_DO_AS = [BOOT_DOMAIN, DOMAIN1, DOMAIN2]
   @Shared
-  def BUNDLES_WITH_DO_AS = [null, BUNDLE1, BUNDLE2, BUNDLE2, null, null, BUNDLE3, BUNDLE1, BUNDLE4, COMBINED_BUNDLE]
+  def BUNDLES_WITH_DO_AS = [null, BUNDLE1, BUNDLE2]
   @Shared
-  def ACC_WITH_DO_AS = new AccessControlContextInfo(DOMAINS_WITH_DO_AS, BUNDLES_WITH_DO_AS, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE4] as Set<String>)
+  def ACC_WITH_DO_AS = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS_WITH_DO_AS + [DOMAIN3, COMBINED_DOMAIN], BUNDLES_WITH_DO_AS + [BUNDLE3, COMBINED_BUNDLE], DOMAINS_WITH_DO_AS, BUNDLES_WITH_DO_AS, new BitSet([0b11000] as long[]), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
   @Shared
-  def SOLUTION1_WITH_DO_AS = new SecuritySolution(STACK_WITH_DO_AS, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_AS, 1), PERMISSION_INFOS, [] as Set<String>, [FRAME1A])
+  def SOLUTION1_WITH_DO_AS = new SecuritySolution(STACK_WITH_DO_AS, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_AS, 1), PERMISSION_INFOS, [COMBINED_BUNDLE] as Set<String>, [FRAME1A])
   @Shared
-  def SOLUTION2_WITH_DO_AS = new SecuritySolution(STACK_WITH_DO_AS, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_AS, 2), PERMISSION_INFOS, [BUNDLE2] as Set<String>, [FRAME2A])
+  def SOLUTION2_WITH_DO_AS = new SecuritySolution(STACK_WITH_DO_AS, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_AS, 2), PERMISSION_INFOS, [BUNDLE2, COMBINED_BUNDLE] as Set<String>, [FRAME2A])
   @Shared
-  def SOLUTION3_WITH_DO_AS = new SecuritySolution(STACK_WITH_DO_AS, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_AS, 3), PERMISSION_INFOS, [BUNDLE2] as Set<String>, [FRAME2B])
+  def SOLUTION3_WITH_DO_AS = new SecuritySolution(STACK_WITH_DO_AS, StackFrameInformation.doPrivilegedAt(STACK_WITH_DO_AS, 3), PERMISSION_INFOS, [BUNDLE2, COMBINED_BUNDLE] as Set<String>, [FRAME2B])
   @Shared
   def SOLUTION4_WITH_DO_AS = new SecuritySolution(STACK_WITH_DO_AS, PERMISSION_INFOS, [BUNDLE2, BUNDLE3, COMBINED_BUNDLE] as Set<String>, [])
 
@@ -346,7 +361,7 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
   @Shared
   def BUNDLES_WITH_ACCEPTABLE = [null, ACCEPTABLE_BUNDLE, BUNDLE2]
   @Shared
-  def ACC_WITH_ACCEPTABLE = new AccessControlContextInfo(DOMAINS_WITH_ACCEPTABLE, BUNDLES_WITH_ACCEPTABLE, 1, PERMISSION, PERMISSION_INFOS, [null, BUNDLE2] as Set<String>)
+  def ACC_WITH_ACCEPTABLE = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS_WITH_ACCEPTABLE, BUNDLES_WITH_ACCEPTABLE, DOMAINS_WITH_ACCEPTABLE, BUNDLES_WITH_ACCEPTABLE, new BitSet(), 1, PERMISSION, PERMISSION_INFOS, [null, BUNDLE2] as Set<String>)
 
   @Unroll
   def "test when #when_what while#analyzing_or_not analyzing doPrivileged() blocks"() {
@@ -380,7 +395,7 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
       info.failedStackIndex == failed_stack_index
       info.privilegedStackIndex == privileged_stack_index
       info.failedDomainIndex == failed_domain_index
-      info.combinedDomainsStartIndex == combined_index
+      info.combinedDomains == combined_domains
       info.context.is(acc)
       analysis == solutions
       if (analysis) {
@@ -393,25 +408,25 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
       }
 
     where:
-      when_what                                                                                               | analyzing_or_not || stack                    | acc                       | can_do_privileged_blocks || acceptable | computed_domains                                                    | failed_bundle     | failed_stack_index | privileged_stack_index | failed_domain_index | combined_index || solutions
-      'no doPrivileged() calls, no proxies, and no combined domains and failing towards the end of the stack' | ''               || STACK                    | ACC1                      | true                     || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE4           | 5                  | -1                     | 3                   | -1             || [SOLUTION1, SOLUTION2, SOLUTION3, SOLUTION4, SOLUTION5, SOLUTION6]
-      'no doPrivileged() calls, no proxies, and no combined domains and failing towards the end of the stack' | ' not'           || STACK                    | ACC1                      | false                    || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE4           | 5                  | -1                     | 3                   | -1             || [SOLUTION6]
-      'no doPrivileged() calls, no proxies, and no combined domains and failing at the end of the stack'      | ''               || STACK                    | ACC2                      | true                     || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE5           | 6                  | -1                     | 4                   | -1             || [SOLUTION1, SOLUTION2, SOLUTION3, SOLUTION4, SOLUTION7, SOLUTION8]
-      'no doPrivileged() calls, no proxies, and no combined domains and failing at the end of the stack'      | ' not'           || STACK                    | ACC2                      | false                    || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE5           | 6                  | -1                     | 4                   | -1             || [SOLUTION8]
-      'a proxy class and failing after'                                                                       | ''               || STACK_WITH_PROXY         | ACC1_WITH_PROXY           | true                     || false      | [BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE1           | 1                  | -1                     | 0                   | -1             || [SOLUTION1_WITH_PROXY, SOLUTION2_WITH_PROXY]
-      'a proxy class and failing after'                                                                       | ' not'           || STACK_WITH_PROXY         | ACC1_WITH_PROXY           | false                    || false      | [BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE1           | 1                  | -1                     | 0                   | -1             || [SOLUTION2_WITH_PROXY]
-      'a proxy class and failing on the proxy'                                                                | ''               || STACK_WITH_PROXY         | ACC2_WITH_PROXY           | true                     || false      | [BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | PROXY_BUNDLE      | 2                  | -1                     | 1                   | -1             || [SOLUTION3_WITH_PROXY, SOLUTION4_WITH_PROXY]
-      'a proxy class and failing on the proxy'                                                                | ' not'           || STACK_WITH_PROXY         | ACC2_WITH_PROXY           | false                    || false      | [BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | PROXY_BUNDLE      | 2                  | -1                     | 1                   | -1             || [SOLUTION4_WITH_PROXY]
-      'a proxy class and failing before'                                                                      | ''               || STACK_WITH_PROXY         | ACC3_WITH_PROXY           | true                     || false      | [BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE2           | 3                  | -1                     | 2                   | -1             || [SOLUTION3_WITH_PROXY, SOLUTION5_WITH_PROXY]
-      'a proxy class and failing before'                                                                      | ' not'           || STACK_WITH_PROXY         | ACC3_WITH_PROXY           | false                    || false      | [BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE2           | 3                  | -1                     | 2                   | -1             || [SOLUTION5_WITH_PROXY]
-      'with a combined domain that has permissions'                                                           | ''               || STACK                    | ACC_WITH_COMBINED_DOMAIN  | true                     || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5, COMBINED_BUNDLE]      | BUNDLE4           | 5                  | -1                     | 3                   | 5              || [SOLUTION1, SOLUTION2, SOLUTION3, SOLUTION4, SOLUTION5, SOLUTION6]
-      'with a combined domain that does not have permissions'                                                 | ''               || STACK                    | ACC2_WITH_COMBINED_DOMAIN | true                     || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5, COMBINED_BUNDLE]      | BUNDLE4           | 5                  | -1                     | 3                   | 5              || [SOLUTION1, SOLUTION2, SOLUTION3, SOLUTION4, SOLUTION5, SOLUTION9]
-      'no doPrivileged() calls, no proxies, and no combined domains and failing towards the end of the stack' | ' not'           || STACK                    | ACC1                      | false                    || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE4           | 5                  | -1                     | 3                   | -1             || [SOLUTION6]
-      'a class calls doPrivileged()'                                                                          | ''               || STACK_WITH_DO_PRIVILEGED | ACC_WITH_DO_PRIVILEGED    | true                     || false      | [BUNDLE1, BUNDLE2, BUNDLE3, PROXY_BUNDLE, BUNDLE4, COMBINED_BUNDLE] | BUNDLE2           | 2                  | 8                      | 1                   | 5              || [SOLUTION1_WITH_DO_PRIVILEGED, SOLUTION2_WITH_DO_PRIVILEGED, SOLUTION3_WITH_DO_PRIVILEGED, SOLUTION4_WITH_DO_PRIVILEGED, SOLUTION5_WITH_DO_PRIVILEGED, SOLUTION6_WITH_DO_PRIVILEGED]
-      'a class calls doPrivileged()'                                                                          | ' not'           || STACK_WITH_DO_PRIVILEGED | ACC_WITH_DO_PRIVILEGED    | false                    || false      | [BUNDLE1, BUNDLE2, BUNDLE3, PROXY_BUNDLE, BUNDLE4, COMBINED_BUNDLE] | BUNDLE2           | 2                  | 8                      | 1                   | 5              || [SOLUTION6_WITH_DO_PRIVILEGED]
-      'a class calls Subject.doAs()'                                                                          | ''               || STACK_WITH_DO_AS         | ACC_WITH_DO_AS            | true                     || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, COMBINED_BUNDLE]               | BUNDLE2           | 2                  | 6                      | 1                   | 3              || [SOLUTION1_WITH_DO_AS, SOLUTION2_WITH_DO_AS, SOLUTION3_WITH_DO_AS, SOLUTION4_WITH_DO_AS]
-      'a class calls Subject.doAs()'                                                                          | ' not'           || STACK_WITH_DO_AS         | ACC_WITH_DO_AS            | false                    || false      | [BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, COMBINED_BUNDLE]               | BUNDLE2           | 2                  | 6                      | 1                   | 3              || [SOLUTION4_WITH_DO_AS]
-      'a class calls something marked acceptable'                                                             | ''               || STACK_WITH_ACCEPTABLE    | ACC_WITH_ACCEPTABLE       | true                     || true       | [ACCEPTABLE_BUNDLE, BUNDLE2]                                        | ACCEPTABLE_BUNDLE | 1                  | -1                     | 0                   | -1             || []
+      when_what                                                                                               | analyzing_or_not || stack                    | acc                       | can_do_privileged_blocks || acceptable | computed_domains                                                          | failed_bundle     | failed_stack_index | privileged_stack_index | failed_domain_index | combined_domains  || solutions
+      'no doPrivileged() calls, no proxies, and no combined domains and failing towards the end of the stack' | ''               || STACK                    | ACC1                      | true                     || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE4           | 5                  | -1                     | 4                   | []                || [SOLUTION1, SOLUTION2, SOLUTION3, SOLUTION4, SOLUTION5, SOLUTION6]
+      'no doPrivileged() calls, no proxies, and no combined domains and failing towards the end of the stack' | ' not'           || STACK                    | ACC1                      | false                    || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE4           | 5                  | -1                     | 4                   | []                || [SOLUTION6]
+      'no doPrivileged() calls, no proxies, and no combined domains and failing at the end of the stack'      | ''               || STACK                    | ACC2                      | true                     || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE5           | 6                  | -1                     | 5                   | []                || [SOLUTION1, SOLUTION2, SOLUTION3, SOLUTION4, SOLUTION7, SOLUTION8]
+      'no doPrivileged() calls, no proxies, and no combined domains and failing at the end of the stack'      | ' not'           || STACK                    | ACC2                      | false                    || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE5           | 6                  | -1                     | 5                   | []                || [SOLUTION8]
+      'a proxy class and failing after'                                                                       | ''               || STACK_WITH_PROXY         | ACC1_WITH_PROXY           | true                     || false      | [null, BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE1           | 1                  | -1                     | 1                   | []                || [SOLUTION1_WITH_PROXY, SOLUTION2_WITH_PROXY]
+      'a proxy class and failing after'                                                                       | ' not'           || STACK_WITH_PROXY         | ACC1_WITH_PROXY           | false                    || false      | [null, BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE1           | 1                  | -1                     | 1                   | []                || [SOLUTION2_WITH_PROXY]
+      'a proxy class and failing on the proxy'                                                                | ''               || STACK_WITH_PROXY         | ACC2_WITH_PROXY           | true                     || false      | [null, BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | PROXY_BUNDLE      | 2                  | -1                     | 2                   | []                || [SOLUTION3_WITH_PROXY, SOLUTION4_WITH_PROXY]
+      'a proxy class and failing on the proxy'                                                                | ' not'           || STACK_WITH_PROXY         | ACC2_WITH_PROXY           | false                    || false      | [null, BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | PROXY_BUNDLE      | 2                  | -1                     | 2                   | []                || [SOLUTION4_WITH_PROXY]
+      'a proxy class and failing before'                                                                      | ''               || STACK_WITH_PROXY         | ACC3_WITH_PROXY           | true                     || false      | [null, BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE2           | 3                  | -1                     | 3                   | []                || [SOLUTION3_WITH_PROXY, SOLUTION5_WITH_PROXY]
+      'a proxy class and failing before'                                                                      | ' not'           || STACK_WITH_PROXY         | ACC3_WITH_PROXY           | false                    || false      | [null, BUNDLE1, PROXY_BUNDLE, BUNDLE2]                                    | BUNDLE2           | 3                  | -1                     | 3                   | []                || [SOLUTION5_WITH_PROXY]
+      'with a combined domain that has permissions'                                                           | ''               || STACK                    | ACC_WITH_COMBINED_DOMAIN  | true                     || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5, COMBINED_BUNDLE]      | BUNDLE4           | 5                  | -1                     | 4                   | [COMBINED_BUNDLE] || [SOLUTION1, SOLUTION2, SOLUTION3, SOLUTION4, SOLUTION5, SOLUTION6]
+      'with a combined domain that does not have permissions'                                                 | ''               || STACK                    | ACC2_WITH_COMBINED_DOMAIN | true                     || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5, COMBINED_BUNDLE]      | BUNDLE4           | 5                  | -1                     | 4                   | [COMBINED_BUNDLE] || [SOLUTION1_WITH_COMBINER, SOLUTION2_WITH_COMBINER, SOLUTION3_WITH_COMBINER, SOLUTION4_WITH_COMBINER, SOLUTION5_WITH_COMBINER, SOLUTION9]
+      'no doPrivileged() calls, no proxies, and no combined domains and failing towards the end of the stack' | ' not'           || STACK                    | ACC1                      | false                    || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, BUNDLE4, BUNDLE5]                       | BUNDLE4           | 5                  | -1                     | 4                   | []                || [SOLUTION6]
+      'a class calls doPrivileged()'                                                                          | ''               || STACK_WITH_DO_PRIVILEGED | ACC_WITH_DO_PRIVILEGED    | true                     || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, PROXY_BUNDLE, BUNDLE4, COMBINED_BUNDLE] | BUNDLE2           | 2                  | 8                      | 2                   | [COMBINED_BUNDLE] || [SOLUTION1_WITH_DO_PRIVILEGED, SOLUTION2_WITH_DO_PRIVILEGED, SOLUTION3_WITH_DO_PRIVILEGED, SOLUTION4_WITH_DO_PRIVILEGED, SOLUTION5_WITH_DO_PRIVILEGED, SOLUTION6_WITH_DO_PRIVILEGED]
+      'a class calls doPrivileged()'                                                                          | ' not'           || STACK_WITH_DO_PRIVILEGED | ACC_WITH_DO_PRIVILEGED    | false                    || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, PROXY_BUNDLE, BUNDLE4, COMBINED_BUNDLE] | BUNDLE2           | 2                  | 8                      | 2                   | [COMBINED_BUNDLE] || [SOLUTION6_WITH_DO_PRIVILEGED]
+      'a class calls Subject.doAs()'                                                                          | ''               || STACK_WITH_DO_AS         | ACC_WITH_DO_AS            | true                     || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, COMBINED_BUNDLE]                        | BUNDLE2           | 2                  | 6                      | 2                   | [COMBINED_BUNDLE] || [SOLUTION1_WITH_DO_AS, SOLUTION2_WITH_DO_AS, SOLUTION3_WITH_DO_AS, SOLUTION4_WITH_DO_AS]
+      'a class calls Subject.doAs()'                                                                          | ' not'           || STACK_WITH_DO_AS         | ACC_WITH_DO_AS            | false                    || false      | [null, BUNDLE1, BUNDLE2, BUNDLE3, COMBINED_BUNDLE]                        | BUNDLE2           | 2                  | 6                      | 2                   | [COMBINED_BUNDLE] || [SOLUTION4_WITH_DO_AS]
+      'a class calls something marked acceptable'                                                             | ''               || STACK_WITH_ACCEPTABLE    | ACC_WITH_ACCEPTABLE       | true                     || true       | [null, ACCEPTABLE_BUNDLE, BUNDLE2]                                        | ACCEPTABLE_BUNDLE | 1                  | -1                     | 1                   | []                || []
   }
 
   def "test when unable to find the location for a domain"() {
@@ -422,7 +437,7 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
         canDoPrivilegedBlocks() >> true
         reflection() >> REFLECTION
       }
-      def acc = new AccessControlContextInfo(DOMAINS, bundles, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE3] as Set<String>)
+      def acc = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS, bundles, DOMAINS, bundles, new BitSet(), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1, BUNDLE3] as Set<String>)
 
     when:
       new SecurityCheckInformation(debug, acc)
@@ -457,7 +472,7 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
         canDoPrivilegedBlocks() >> true
         reflection() >> REFLECTION
       }
-      def acc = new AccessControlContextInfo(DOMAINS, BUNDLES, 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
+      def acc = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS, BUNDLES, DOMAINS, BUNDLES, new BitSet(), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
 
     when:
       new SecurityCheckInformation(debug, acc)
@@ -468,7 +483,7 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
       e.message.contains('unable to find a domain computed from the stack')
   }
 
-  def "test when recomputing cannot correlate a domain from the access control context with those computed from the stack"() {
+  def "test when recomputing cannot find a domain computed from the stack in the access control context"() {
     given:
       def stack = [
           ACC_CHECK_FRAME,
@@ -491,7 +506,8 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
         canDoPrivilegedBlocks() >> true
         reflection() >> REFLECTION
       }
-      def acc = new AccessControlContextInfo(DOMAINS, [null, 'what-is-that', BUNDLE2, BUNDLE3, BUNDLE1, BUNDLE4, BUNDLE5], 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
+      def bundles = [null, 'what-is-that', BUNDLE2, BUNDLE3, BUNDLE1, BUNDLE4, BUNDLE5]
+      def acc = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS, bundles, DOMAINS, bundles, new BitSet(), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
 
     when:
       new SecurityCheckInformation(debug, acc)
@@ -499,6 +515,31 @@ class SecurityCheckInformationSpec extends ReflectionSpecification {
     then:
       def e = thrown(Error)
 
-      e.message.contains('unable to correlate a domain in the access control context')
+      e.message.contains('unable to find a domain computed from the stack in the access control context')
+  }
+
+  def "test when recomputing cannot correlate a domain in the access control context with those computed from the stack"() {
+    given:
+      def stack = [
+          ACC_CHECK_FRAME,
+          FRAME1A,
+          FRAME3,
+          FRAME1B,
+          FRAME5
+      ]
+      def debug = Mock(Debug) {
+        threadStack() >> stack
+        canDoPrivilegedBlocks() >> true
+        reflection() >> REFLECTION
+      }
+      def acc = new AccessControlContextInfo(DEBUG, ACC_OBJ, SUBJECT_DOMAIN_COMBINER, DOMAINS, BUNDLES, DOMAINS, BUNDLES, new BitSet(), 2, PERMISSION, PERMISSION_INFOS, [null, BUNDLE1] as Set<String>)
+
+    when:
+      new SecurityCheckInformation(debug, acc)
+
+    then:
+      def e = thrown(Error)
+
+      e.message.contains('unable to correlate a domain in the access control context with those computed from the stack')
   }
 }

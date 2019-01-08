@@ -13,7 +13,7 @@
  */
 package org.codice.acdebugger.breakpoints
 
-import com.sun.jdi.ArrayReference
+
 import com.sun.jdi.EnhancedStackFrame
 import com.sun.jdi.IntegerValue
 import com.sun.jdi.Location
@@ -57,8 +57,6 @@ class AccessControlContextCheckBreakpointProcessorSpec extends Specification {
 
   @Shared
   def PERMISSION = Mock(ObjectReference)
-  @Shared
-  def CONTEXT = Mock(ArrayReference)
   @Shared
   def ACC = Mock(ObjectReference)
 
@@ -121,8 +119,7 @@ class AccessControlContextCheckBreakpointProcessorSpec extends Specification {
       security.isAcceptable() >> acceptable
 
     and:
-      1 * reflection.get(ACC, 'context', '[Ljava/security/ProtectionDomain;') >> CONTEXT
-      1 * processor.process(debug, CONTEXT, LOCAL_I, PERMISSION) >> security
+      1 * processor.process(debug, ACC, LOCAL_I, PERMISSION) >> security
       1 * security.getFailedDomain() >> null
       0 * permissions.grant(*_)
       0 * debug.record(_)
@@ -162,8 +159,7 @@ class AccessControlContextCheckBreakpointProcessorSpec extends Specification {
       security.isAcceptable() >> acceptable
 
     and:
-      1 * reflection.get(ACC, 'context', '[Ljava/security/ProtectionDomain;') >> CONTEXT
-      1 * processor.process(debug, CONTEXT, LOCAL_I, PERMISSION) >> security
+      1 * processor.process(debug, ACC, LOCAL_I, PERMISSION) >> security
       1 * security.getFailedDomain() >> 'd1'
       1 * security.analyze() >> solutions
       if (grant_domains) {
